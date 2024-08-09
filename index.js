@@ -14,7 +14,7 @@ const meta = {
             amplitude: 0.5,
             speed: 1,
             angle: 0,
-            steepness: 0.6,
+            steepness: 0.2,
         }
     ]
 }
@@ -44,8 +44,7 @@ const geometries = {
 }
 
 function getTime() {
-    return 0;
-    // return performance.now() / 2000;
+    return performance.now() / 2000;
 }
 
 function wavesToUniforms(){
@@ -159,8 +158,10 @@ const passes = [
                     `
                 })
             );
-
             this.scene.add(this.ocean);
+        },
+        resize: function() {
+            return;
         },
         render: function() {
             renderer.setRenderTarget(renderTarget);
@@ -174,12 +175,14 @@ const passes = [
             this.ocean.material.uniforms.wphases.value = meta.waves.map((wave) => wave.speed * getTime() * Math.PI*2/wave.length);
         }
     },
-
     // Final Pass
     {
         scene: new THREE.Scene(),
         camera: new THREE.PerspectiveCamera(50, window.innerWidth/window.innerHeight, 0.1, 1000),
         controls: undefined,
+        water : undefined,
+        skull: undefined,
+        lights: [],
         resize: function() {
             this.camera.aspect = window.innerWidth/window.innerHeight;
             this.camera.updateProjectionMatrix();
@@ -193,6 +196,7 @@ const passes = [
 
             // Add skull
             gltfloader.load('public/mat_no_export_skull.glb', (mesh)=>{
+                this.skull = mesh.scene;
                 textloader.load('public/Textures/diffuse_compressed.jpg', (colorText) => {
                     textloader.load('public/Textures/normals_compressed.jpg', (normalText) => {
                         colorText.colorSpace = THREE.SRGBColorSpace;
@@ -213,15 +217,103 @@ const passes = [
                 })
             });
 
+            // Add lights
             let l = new THREE.DirectionalLight(0xff5f5f, 1);
             l.position.y = 5; l.position.x = 5; l.position.z = 5;
             l.lookAt(new THREE.Vector3(0,0,0));
             this.scene.add(l);
+            this.lights.push(l);
 
             l = new THREE.DirectionalLight(0x1f1fff, 1);
             l.position.y = -5; l.position.x = -5; l.position.z = -5;
             l.lookAt(new THREE.Vector3(0,0,0));
             this.scene.add(l);
+            this.lights.push(l);
+
+            // Add Water surface
+            this.water = new THREE.Mesh(
+                geometries.ocean,
+                new THREE.ShaderMaterial({
+                    side : THREE.DoubleSide,
+                    uniforms: {
+                        roughness : {value: 0.8},
+                        color : {value : new THREE.Color(0.0, 0.35, 0.73)},
+                        envMap : {value : passes[1].scene.background},
+                        tPosition: { value: renderTarget.textures[0] },  // Ocean Positions
+                        tNormal: { value: renderTarget.textures[1] },     // Ocean Normals
+                        lights: {value: this.lights.flatMap(l => [l.position.x, l.position.z, l.position.y])},
+                        lcolors: {value: this.lights.flatMap(l => [l.color.r, l.color.g, l.color.b])}
+
+                    },
+                    vertexShader: `
+                        uniform sampler2D tPosition;
+                        uniform sampler2D tNormal;    
+                        varying vec3 wPos; // World position
+                        varying vec2 vUv;
+
+                        void main() {
+                            vec3 nPos = texture(tPosition, uv).xyz + position.xyz; 
+                            wPos = (modelMatrix * vec4(nPos, 1.0)).xyz;
+                            vUv = uv;
+                            gl_Position = projectionMatrix * modelViewMatrix * vec4(nPos, 1.0);
+                        }
+                    `,
+                    fragmentShader: `
+                        precision highp float;
+                        precision highp int;
+                        // layout(location = 0) out vec4 pc_FragColor;
+
+                        uniform sampler2D envMap;
+                        uniform sampler2D tNormal;
+                        uniform vec3 color;             // Surface Diffuse color
+                        uniform float roughness;        // surface roughness
+                        uniform mat4 modelMatrix;
+                        uniform float lights[${this.lights.length * 3}];       // Directional Lights
+                        uniform float lcolors[${this.lights.length * 3}];       // Lights Colors
+                        
+                        varying vec3 wPos;
+                        varying vec2 vUv;
+
+                        void main() {
+                            vec3 nNor = texture(tNormal, vUv).xyz;
+                            vec3 wNor = transpose(inverse(mat3(modelMatrix))) * nNor;
+
+                            vec3 I = normalize(wPos - cameraPosition);
+                            vec3 R = reflect(I, normalize(wNor));
+                            vec3 H = normalize(I + R);
+
+                            vec3 diff = color;
+                            float diffuse = 0.;
+                            for(int i = 0; i < ${this.lights.length}; i++){
+                                vec3 L = vec3(0.);
+                                L.x = lights[i*3];
+                                L.y = lights[i*3+1];
+                                L.z = lights[i*3+2];
+
+                                vec3 Lc = vec3(0.);
+                                Lc.x = lcolors[i*3];
+                                Lc.y = lcolors[i*3+1];
+                                Lc.z = lcolors[i*3+2];
+
+                                diffuse += max(dot(wNor, wPos - L), 0.0);
+                            }                         
+
+                            float spec = pow(max(dot(wNor, H), 0.0), 1.0 / roughness);
+                            float fresnel = pow(1.0 - max(dot(wNor, I), 0.0), 5.0);
+
+                            // Combine diffuse and specular components
+                            vec3 L_ = diff; //+  spec * fresnel;
+
+                            // vec3 L = color/PI + L_*(1.0 - roughness);
+                            gl_FragColor = vec4(vec3(diffuse), 1.0);
+                        }
+                    `
+                    
+                })
+            );
+
+            this.scene.add(this.water);
+
         },
         update: function (){
             this.controls.update();
@@ -241,7 +333,7 @@ window.addEventListener('resize', () => {
 passes.forEach(pass => pass.init());
 const animate = () => {
     requestAnimationFrame(animate);
-    passes.forEach((pass) => {pass.update(); pass.view && pass.view();});
+    passes.forEach((pass) => {pass.update(); pass.render();});
 }
 
 animate();
