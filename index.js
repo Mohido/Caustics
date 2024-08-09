@@ -2,7 +2,25 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'; 
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'; 
 
+// Variables
+const meta = {
+    wmSize: 512,        // Wave maps size (normal and displacement maps)
+    oSize: 10,          // Ocean size (threejs units)
+    oSegments: 20,      // Ocean segments 
+    mWaves : 5,         // Max waves (used to define the shaders)
+    waves : [           // Waves parameters.
+        {
+            length: 5,
+            amplitude: 0.5,
+            speed: 1,
+            angle: 0,
+            steepness: 0.6,
+        }
+    ]
+}
 
+
+// THREEJS
 const renderer = new THREE.WebGLRenderer();
 if(!renderer.capabilities.isWebGL2){
     console.error("Your browser doesn't support the correct webgl version");
@@ -10,11 +28,154 @@ if(!renderer.capabilities.isWebGL2){
 renderer.setSize(window.innerWidth, window.innerHeight);
 document.body.appendChild(renderer.domElement);
 
+const renderTarget = new THREE.WebGLRenderTarget(meta.wmSize, meta.wmSize, {
+    type: THREE.FloatType,
+    format: THREE.RGBAFormat,
+    encoding: THREE.LinearEncoding,
+    count : 2
+});
 
 const gltfloader = new GLTFLoader();
 const textloader = new THREE.TextureLoader();
 
+// Often used geometries.
+const geometries = {
+    ocean: new THREE.PlaneGeometry(meta.oSize, meta.oSize, meta.oSegments, meta.oSegments)
+}
+
+function getTime() {
+    return 0;
+    // return performance.now() / 2000;
+}
+
+function wavesToUniforms(){
+    const PI2 = Math.PI*2;            
+    const toDir = (wave) =>  [Math.cos((wave.angle /180) * Math.PI ), Math.sin((wave.angle /180)*Math.PI )]
+    
+    return {
+            wcount :       {value :  meta.waves.length},
+            wfrequencies:  {value : (meta.waves.map((wave) => PI2/wave.length))},
+            wfrequencies_: {value : (meta.waves.map((wave) => wave.length/PI2))},
+            wphases:       {value : (meta.waves.map((wave) => wave.speed * getTime() * PI2/wave.length))} ,
+            wamplitudes:   {value : (meta.waves.map((wave) => wave.amplitude) )} ,
+            wdirs:         {value : (meta.waves.flatMap(wave => toDir(wave))) } ,     
+            wsteepnesses:  {value : (meta.waves.map((wave) => wave.steepness) )} 
+        }
+}
+
+function getWaveSubShader(mwaves) {
+    return `
+        uniform float time;
+        uniform int wcount;
+        uniform float wfrequencies[${mwaves}];
+        uniform float wfrequencies_[${mwaves}];
+        uniform float wphases[${mwaves}];
+        uniform float wamplitudes[${mwaves}];
+        uniform float wdirs[${mwaves*2}];
+        uniform float wsteepnesses[${mwaves}];
+
+        struct Displacement{
+            vec3 position;
+            vec3 normal;
+        };
+
+        Displacement gerstner(Displacement inputs){
+            Displacement displaced;
+            displaced.position = vec3(0.);
+            displaced.normal = inputs.normal;
+
+            for(int i = 0 ; i < wcount ; i++){
+                // Extract data
+                float f_ = wfrequencies_[i];
+                float f = wfrequencies[i];
+                float p = wphases[i];
+                float s = wsteepnesses[i];
+                float a = wamplitudes[i];
+
+                vec2 dir = normalize(vec2(wdirs[i*2], wdirs[i*2+1]));
+                float dp = dot(dir, inputs.position.xy);
+
+                // Gerstner Algorithm
+                float wcos = cos(dp*f + p);
+                float wsin = sin(dp*f + p);
+
+                displaced.position.x += s * f_ * dir.x * wcos;
+                displaced.position.y += s * f_ * dir.y * wcos;
+                displaced.position.z += a * wsin;
+
+                displaced.normal.x -= dir.x * f * a * wcos;
+                displaced.normal.y -= dir.y * f * a * wcos;
+                displaced.normal.z -= (s/float(wcount)) * wsin;
+            }
+            displaced.normal = normalize(displaced.normal);
+            displaced.position.x /= float(wcount);
+            displaced.position.y /= float(wcount);
+            return displaced;
+        }
+
+    `
+}
+
+
 const passes = [
+    // Wave displacement and Normals Generators
+    {
+        scene: new THREE.Scene(),
+        camera : new THREE.OrthographicCamera(meta.oSize / -2, meta.oSize / 2, meta.oSize / 2, meta.oSize / -2, 0.1, 1000),
+        ocean : undefined,
+        init : function(){
+            this.camera.position.z = 5; 
+            this.camera.lookAt(new THREE.Vector3(0,0,0));
+            this.ocean = new THREE.Mesh(geometries.ocean,
+                new THREE.ShaderMaterial({
+                    glslVersion : THREE.GLSL3,
+                    side: THREE.DoubleSide,
+                    uniforms: wavesToUniforms(),
+                    vertexShader: `
+                        ${getWaveSubShader(meta.mWaves)}
+                        varying Displacement displaced;
+                        varying vec3 oPosition;
+                        void main(){
+                            oPosition = position;
+                            displaced = gerstner(Displacement(position, normal));   // Generate wave
+                            displaced.normal = normal;      // We only need position
+                            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                        }
+                    `,
+                    fragmentShader: `
+                        ${getWaveSubShader(meta.mWaves)}
+                        layout(location = 0) out vec4 tPosition;
+                        layout(location = 1) out vec4 tNormal;
+
+                        varying Displacement displaced;
+                        varying vec3 oPosition;
+
+                        void main() {
+                            Displacement displaced = gerstner(Displacement(oPosition, displaced.normal));
+
+                            tPosition = vec4(displaced.position, 1.0); 
+                            tNormal = vec4(displaced.normal, 1.0); 
+                        }
+                    `
+                })
+            );
+
+            this.scene.add(this.ocean);
+        },
+        render: function() {
+            renderer.setRenderTarget(renderTarget);
+            renderer.render(this.scene, this.camera);
+            renderer.setRenderTarget(null);
+        },
+        view: function(){
+            renderer.render(this.scene, this.camera);
+        },
+        update : function(){
+            this.ocean.material.uniforms.wphases.value = meta.waves.map((wave) => wave.speed * getTime() * Math.PI*2/wave.length);
+        }
+    },
+
+    // Final Pass
     {
         scene: new THREE.Scene(),
         camera: new THREE.PerspectiveCamera(50, window.innerWidth/window.innerHeight, 0.1, 1000),
@@ -80,7 +241,7 @@ window.addEventListener('resize', () => {
 passes.forEach(pass => pass.init());
 const animate = () => {
     requestAnimationFrame(animate);
-    passes.forEach((pass) => {pass.update(); pass.render();});
+    passes.forEach((pass) => {pass.update(); pass.view && pass.view();});
 }
 
 animate();
