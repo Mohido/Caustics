@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'; 
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'; 
+import { EXRLoader } from 'three/addons/loaders/EXRLoader.js'; 
 
 // Variables
 const meta = {
@@ -11,9 +12,23 @@ const meta = {
     waves : [           // Waves parameters.
         {
             length: 5,
-            amplitude: 0.5,
+            amplitude: 0.4,
             speed: 1,
             angle: 0,
+            steepness: 0.6,
+        },
+        {
+            length: 2,
+            amplitude: 0.05,
+            speed: 2.3,
+            angle: 45,
+            steepness: 0.2,
+        },
+        {
+            length: 1.5,
+            amplitude: 0.05,
+            speed: 2.5,
+            angle: 315,
             steepness: 0.2,
         }
     ]
@@ -21,7 +36,7 @@ const meta = {
 
 
 // THREEJS
-const renderer = new THREE.WebGLRenderer();
+const renderer = new THREE.WebGLRenderer({alpha:true});
 if(!renderer.capabilities.isWebGL2){
     console.error("Your browser doesn't support the correct webgl version");
 }
@@ -44,7 +59,7 @@ const geometries = {
 }
 
 function getTime() {
-    return performance.now() / 2000;
+    return performance.now() / 3000;
 }
 
 function wavesToUniforms(){
@@ -194,9 +209,19 @@ const passes = [
             this.controls = new OrbitControls(this.camera, renderer.domElement);
             this.controls.update();
 
+            // Add background
+            new EXRLoader().load('public/sunflowers_puresky_1k.exr', (texture) => {
+                texture.mapping = THREE.EquirectangularReflectionMapping;
+                passes[1].scene.background = texture;
+                texture.dispose();
+            })
+
+
             // Add skull
             gltfloader.load('public/mat_no_export_skull.glb', (mesh)=>{
                 this.skull = mesh.scene;
+                mesh.scene.position.y -= 3;
+                mesh.scene.rotateX(-Math.PI/4);
                 textloader.load('public/Textures/diffuse_compressed.jpg', (colorText) => {
                     textloader.load('public/Textures/normals_compressed.jpg', (normalText) => {
                         colorText.colorSpace = THREE.SRGBColorSpace;
@@ -208,7 +233,7 @@ const passes = [
                                     map : colorText,
                                     side: THREE.DoubleSide,
                                     normalMap : normalText,
-                                    roughness: 0,
+                                    roughness: 1,
                                 });
                                 child.material.needsUpdate = true;
                             }
@@ -218,33 +243,29 @@ const passes = [
             });
 
             // Add lights
-            let l = new THREE.DirectionalLight(0xff5f5f, 1);
-            l.position.y = 5; l.position.x = 5; l.position.z = 5;
-            l.lookAt(new THREE.Vector3(0,0,0));
-            this.scene.add(l);
-            this.lights.push(l);
-
-            l = new THREE.DirectionalLight(0x1f1fff, 1);
-            l.position.y = -5; l.position.x = -5; l.position.z = -5;
+            let l = new THREE.PointLight(0xffffff, 300);
+            l.position.y = 10; l.position.x = 10; l.position.z = 10;
+            
             l.lookAt(new THREE.Vector3(0,0,0));
             this.scene.add(l);
             this.lights.push(l);
 
             // Add Water surface
             this.water = new THREE.Mesh(
-                geometries.ocean,
+                geometries.ocean.clone().rotateX(Math.PI/2),
                 new THREE.ShaderMaterial({
                     side : THREE.DoubleSide,
                     uniforms: {
-                        roughness : {value: 0.8},
+                        roughness : {value: 0.05},
                         color : {value : new THREE.Color(0.0, 0.35, 0.73)},
-                        envMap : {value : passes[1].scene.background},
-                        tPosition: { value: renderTarget.textures[0] },  // Ocean Positions
-                        tNormal: { value: renderTarget.textures[1] },     // Ocean Normals
-                        lights: {value: this.lights.flatMap(l => [l.position.x, l.position.z, l.position.y])},
-                        lcolors: {value: this.lights.flatMap(l => [l.color.r, l.color.g, l.color.b])}
-
+                        envMap : {value : passes[1].scene.background}, 
+                        tPosition: { value: renderTarget.textures[0] },
+                        tNormal: { value: renderTarget.textures[1] },
+                        lights: {value: this.lights.flatMap(l => [l.position.x, l.position.y, l.position.z])},
+                        lcolors: {value: this.lights.flatMap(l => [l.color.r, l.color.g, l.color.b])},
+                        lintinsity: {value: this.lights.map(l => l.intensity)}
                     },
+                    transparent: true,
                     vertexShader: `
                         uniform sampler2D tPosition;
                         uniform sampler2D tNormal;    
@@ -252,7 +273,7 @@ const passes = [
                         varying vec2 vUv;
 
                         void main() {
-                            vec3 nPos = texture(tPosition, uv).xyz + position.xyz; 
+                            vec3 nPos = texture(tPosition, uv).xzy + position.xyz; 
                             wPos = (modelMatrix * vec4(nPos, 1.0)).xyz;
                             vUv = uv;
                             gl_Position = projectionMatrix * modelViewMatrix * vec4(nPos, 1.0);
@@ -261,59 +282,62 @@ const passes = [
                     fragmentShader: `
                         precision highp float;
                         precision highp int;
-                        // layout(location = 0) out vec4 pc_FragColor;
 
                         uniform sampler2D envMap;
                         uniform sampler2D tNormal;
                         uniform vec3 color;             // Surface Diffuse color
                         uniform float roughness;        // surface roughness
                         uniform mat4 modelMatrix;
+
                         uniform float lights[${this.lights.length * 3}];       // Directional Lights
                         uniform float lcolors[${this.lights.length * 3}];       // Lights Colors
+                        uniform float lintinsity[${this.lights.length}];       // Lights Colors
                         
                         varying vec3 wPos;
                         varying vec2 vUv;
 
                         void main() {
-                            vec3 nNor = texture(tNormal, vUv).xyz;
+                            vec3 nNor = texture(tNormal, vUv).xzy;
                             vec3 wNor = transpose(inverse(mat3(modelMatrix))) * nNor;
 
-                            vec3 I = normalize(wPos - cameraPosition);
+                            vec3 I = normalize(cameraPosition - wPos);
+                            float IN = dot(wNor, I);
                             vec3 R = reflect(I, normalize(wNor));
-                            vec3 H = normalize(I + R);
 
-                            vec3 diff = color;
                             float diffuse = 0.;
+                            vec3 spec = vec3(0.);
+                            float fresnel = 0.; 
+                            if(IN > 0.){
+                                fresnel = pow(1.0 - max(IN, 0.0), 5.0);
+                            }
+
                             for(int i = 0; i < ${this.lights.length}; i++){
                                 vec3 L = vec3(0.);
                                 L.x = lights[i*3];
                                 L.y = lights[i*3+1];
                                 L.z = lights[i*3+2];
-
                                 vec3 Lc = vec3(0.);
                                 Lc.x = lcolors[i*3];
                                 Lc.y = lcolors[i*3+1];
                                 Lc.z = lcolors[i*3+2];
-
-                                diffuse += max(dot(wNor, wPos - L), 0.0);
-                            }                         
-
-                            float spec = pow(max(dot(wNor, H), 0.0), 1.0 / roughness);
-                            float fresnel = pow(1.0 - max(dot(wNor, I), 0.0), 5.0);
-
-                            // Combine diffuse and specular components
-                            vec3 L_ = diff; //+  spec * fresnel;
-
-                            // vec3 L = color/PI + L_*(1.0 - roughness);
-                            gl_FragColor = vec4(vec3(diffuse), 1.0);
+                                
+                                vec3 L_ =  L - wPos;
+                                vec3 H = normalize(I + L_);
+                                
+                                diffuse += max(dot(wNor, normalize(L_)), 0.0) * lintinsity[i] / pow(length(L_),2.) ;
+                                spec += Lc * pow(max(dot(wNor, H), 0.0), 1.0 / roughness);
+                            }
+                            vec3 L_ = diffuse*color +  spec * fresnel;
+                            gl_FragColor = vec4(vec3(L_), 0.6);
                         }
                     `
-                    
                 })
             );
-
             this.scene.add(this.water);
 
+            // Add Alter
+
+            // Add Underwater fog
         },
         update: function (){
             this.controls.update();
