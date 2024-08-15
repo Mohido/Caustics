@@ -6,8 +6,8 @@ import { EXRLoader } from 'three/addons/loaders/EXRLoader.js';
 // Variables
 const meta = {
     wmSize: 512,        // Wave maps size (normal and displacement maps)
-    oSize: 10,          // Ocean size (threejs units)
-    oSegments: 20,      // Ocean segments 
+    oSize: 8,          // Ocean size (threejs units)
+    oSegments: 18,      // Ocean segments 
     mWaves : 5,         // Max waves (used to define the shaders)
     waves : [           // Waves parameters.
         {
@@ -197,6 +197,7 @@ const passes = [
         controls: undefined,
         water : undefined,
         skull: undefined,
+        ground : undefined,
         lights: [],
         resize: function() {
             this.camera.aspect = window.innerWidth/window.innerHeight;
@@ -204,9 +205,9 @@ const passes = [
             this.controls.update();
         },
         init : function (){
-            this.camera.position.z = 3; this.camera.position.x = -1; this.camera.position.y = 1;
-            this.camera.lookAt(new THREE.Vector3(0,0,0));
+            this.camera.position.z = 5; this.camera.position.x = 0; this.camera.position.y = -1;
             this.controls = new OrbitControls(this.camera, renderer.domElement);
+            this.controls.target = new THREE.Vector3(0,-3,0);
             this.controls.update();
 
             // Add background
@@ -221,7 +222,7 @@ const passes = [
             gltfloader.load('public/mat_no_export_skull.glb', (mesh)=>{
                 this.skull = mesh.scene;
                 mesh.scene.position.y -= 3;
-                mesh.scene.rotateX(-Math.PI/4);
+                mesh.scene.rotateX(-Math.PI/5);
                 textloader.load('public/Textures/diffuse_compressed.jpg', (colorText) => {
                     textloader.load('public/Textures/normals_compressed.jpg', (normalText) => {
                         colorText.colorSpace = THREE.SRGBColorSpace;
@@ -234,6 +235,8 @@ const passes = [
                                     side: THREE.DoubleSide,
                                     normalMap : normalText,
                                     roughness: 1,
+                                    envMap: this.scene.background,
+                                    envMapIntensity: 0.05
                                 });
                                 child.material.needsUpdate = true;
                             }
@@ -241,6 +244,18 @@ const passes = [
                     })
                 })
             });
+
+            // Add Alter
+            gltfloader.load('public/ground/undersea.gltf', (mesh) => {
+                this.ground = mesh.scene.children[0];
+                this.ground.material.specularIntensity = 0;
+                this.ground.position.y -= 3.55;
+                this.scene.fog = new THREE.FogExp2( new THREE.Color(0.0, 0.05, 0.25), 0.06 );
+                this.ground.material.side = THREE.FrontSide;
+                this.ground.material.envMap = this.scene.background;
+                this.ground.material.envMapIntensity = 0.2;
+                this.scene.add(this.ground);
+            })
 
             // Add lights
             let l = new THREE.PointLight(0xffffff, 300);
