@@ -2,6 +2,10 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'; 
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'; 
 import { EXRLoader } from 'three/addons/loaders/EXRLoader.js'; 
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { GammaCorrectionShader } from 'three/addons/shaders/GammaCorrectionShader.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 
 // Variables
 const meta = {
@@ -12,7 +16,7 @@ const meta = {
     waves : [           // Waves parameters.
         {
             length: 5,
-            amplitude: 0.4,
+            amplitude: 0.3,
             speed: 1,
             angle: 0,
             steepness: 0.6,
@@ -30,17 +34,29 @@ const meta = {
             speed: 2.5,
             angle: 315,
             steepness: 0.2,
-        }
+        },
+        {
+            length: 6,
+            amplitude: 0.1,
+            speed: 7.3,
+            angle: 70,
+            steepness: 0,
+        },
     ]
 }
 
 
 // THREEJS
 const renderer = new THREE.WebGLRenderer({alpha:true});
+
 if(!renderer.capabilities.isWebGL2){
     console.error("Your browser doesn't support the correct webgl version");
 }
 renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+// renderer.outputEncoding = THREE.sRGBEncoding; // Ensure correct color encoding for final output
+renderer.toneMapping = THREE.NoToneMapping;  // Disable tone mapping for simplicity
+
 document.body.appendChild(renderer.domElement);
 
 const renderTarget = new THREE.WebGLRenderTarget(meta.wmSize, meta.wmSize, {
@@ -131,6 +147,36 @@ function getWaveSubShader(mwaves) {
 }
 
 
+// Uses Gerstner Wave
+function causticMaterial(){
+    return new THREE.ShaderMaterial({
+        glslVersion : THREE.GLSL3,
+        uniforms: wavesToUniforms(),
+        vertexShader: `
+            ${getWaveSubShader(meta.mWaves)}
+            varying vec3 oPosition;
+            void main(){
+                oPosition = vec3(position.x, position.z, 0.0);
+                gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+            }
+        `,
+        fragmentShader: `
+            ${getWaveSubShader(meta.mWaves)}
+            layout(location = 0) out vec4 tCaustics;
+            varying vec3 oPosition;
+            void main() {
+                Displacement displaced = gerstner(Displacement(oPosition, vec3(0.,0.,1.)));
+                
+                // Calculate Transmition Ray
+
+                // Closer angle to ground normal, means strong light. 
+
+                tCaustics = vec4(displaced.normal, 1.0); 
+            }
+        `
+    });
+}
+
 const passes = [
     // Wave displacement and Normals Generators
     {
@@ -193,7 +239,27 @@ const passes = [
     // Final Pass
     {
         scene: new THREE.Scene(),
-        camera: new THREE.PerspectiveCamera(50, window.innerWidth/window.innerHeight, 0.1, 1000),
+        prescene: new THREE.Scene(),    // Used for Creating the Caustics only
+        fsttarget: new THREE.WebGLRenderTarget(window.innerWidth, window.innerHeight, {
+            format: THREE.RGBAFormat,
+            type: THREE.UnsignedByteType, // Can use THREE.FloatType if higher precision is needed
+            colorSpace: THREE.SRGBColorSpace,
+            // encoding: THREE.sRGBEncoding,
+            magFilter: THREE.NearestFilter,
+            minFilter: THREE.NearestFilter,
+            generateMipmaps: false
+        }),
+        sndtarget: new THREE.WebGLRenderTarget(window.innerWidth, window.innerHeight, {
+            format: THREE.RGBAFormat,
+            type: THREE.UnsignedByteType, // Can use THREE.FloatType if higher precision is needed
+            colorSpace: THREE.SRGBColorSpace,
+            magFilter: THREE.NearestFilter,
+            minFilter: THREE.NearestFilter,
+            generateMipmaps: false,
+        }),
+        postscene : new THREE.Scene(),
+        composer : new EffectComposer(renderer),
+        camera: new THREE.PerspectiveCamera(50, window.innerWidth/window.innerHeight, 0.1, 100),
         controls: undefined,
         water : undefined,
         skull: undefined,
@@ -213,16 +279,27 @@ const passes = [
             // Add background
             new EXRLoader().load('public/sunflowers_puresky_1k.exr', (texture) => {
                 texture.mapping = THREE.EquirectangularReflectionMapping;
-                passes[1].scene.background = texture;
+                this.scene.background = texture;
+                this.scene.environment = texture;
+                this.water.material.uniforms["envMap"].value = texture;
+                this.water.material.needsUpdate = true;
                 texture.dispose();
             })
-
 
             // Add skull
             gltfloader.load('public/mat_no_export_skull.glb', (mesh)=>{
                 this.skull = mesh.scene;
                 mesh.scene.position.y -= 3;
                 mesh.scene.rotateX(-Math.PI/5);
+
+                // Prescene 
+                const cl = this.skull.clone();
+                cl.traverse(child => {
+                    if(child instanceof THREE.Mesh)
+                        child.material = causticMaterial();
+                })
+                this.prescene.add(cl);
+
                 textloader.load('public/Textures/diffuse_compressed.jpg', (colorText) => {
                     textloader.load('public/Textures/normals_compressed.jpg', (normalText) => {
                         colorText.colorSpace = THREE.SRGBColorSpace;
@@ -245,7 +322,7 @@ const passes = [
                 })
             });
 
-            // Add Alter
+            // Add Ground
             gltfloader.load('public/ground/undersea.gltf', (mesh) => {
                 this.ground = mesh.scene.children[0];
                 this.ground.material.specularIntensity = 0;
@@ -255,6 +332,11 @@ const passes = [
                 this.ground.material.envMap = this.scene.background;
                 this.ground.material.envMapIntensity = 0.2;
                 this.scene.add(this.ground);
+
+                // Prescene 
+                const cl = this.ground.clone();
+                cl.material = causticMaterial();
+                this.prescene.add(cl);
             })
 
             // Add lights
@@ -264,7 +346,7 @@ const passes = [
             l.lookAt(new THREE.Vector3(0,0,0));
             this.scene.add(l);
             this.lights.push(l);
-
+            const envmap = this.scene.background;
             // Add Water surface
             this.water = new THREE.Mesh(
                 geometries.ocean.clone().rotateX(Math.PI/2),
@@ -272,13 +354,13 @@ const passes = [
                     side : THREE.DoubleSide,
                     uniforms: {
                         roughness : {value: 0.05},
-                        color : {value : new THREE.Color(0.0, 0.35, 0.73)},
-                        envMap : {value : passes[1].scene.background}, 
+                        color : {value : new THREE.Color(0.0, 0.1, 0.23)},
                         tPosition: { value: renderTarget.textures[0] },
                         tNormal: { value: renderTarget.textures[1] },
                         lights: {value: this.lights.flatMap(l => [l.position.x, l.position.y, l.position.z])},
                         lcolors: {value: this.lights.flatMap(l => [l.color.r, l.color.g, l.color.b])},
-                        lintinsity: {value: this.lights.map(l => l.intensity)}
+                        lintinsity: {value: this.lights.map(l => l.intensity)},
+                        envMap: {value: undefined},
                     },
                     transparent: true,
                     vertexShader: `
@@ -286,11 +368,12 @@ const passes = [
                         uniform sampler2D tNormal;    
                         varying vec3 wPos; // World position
                         varying vec2 vUv;
-
+                        varying vec3 oNorm;
                         void main() {
                             vec3 nPos = texture(tPosition, uv).xzy + position.xyz; 
                             wPos = (modelMatrix * vec4(nPos, 1.0)).xyz;
                             vUv = uv;
+                            oNorm = normal;
                             gl_Position = projectionMatrix * modelViewMatrix * vec4(nPos, 1.0);
                         }
                     `,
@@ -310,55 +393,127 @@ const passes = [
                         
                         varying vec3 wPos;
                         varying vec2 vUv;
+                        varying vec3 oNorm;
+
+                        vec2 directionToEquirectUV(vec3 dir) {
+                            // Normalize the input direction vector
+                            dir = normalize(dir);
+
+                            // Calculate the longitude and latitude angles
+                            float longitude = atan(dir.z, dir.x);
+                            float latitude = asin(dir.y);
+
+                            // Map the angles to UV coordinates
+                            vec2 uv;
+                            uv.x = (longitude / (2.0 * 3.1415926535)) + 0.5; // Map to [0, 1]
+                            uv.y = (latitude / 3.1415926535) + 0.5; // Map to [0, 1]
+
+                            return uv;
+                        }
+
 
                         void main() {
                             vec3 nNor = texture(tNormal, vUv).xzy;
-                            vec3 wNor = transpose(inverse(mat3(modelMatrix))) * nNor;
+                            vec3 wNor = normalize(transpose(inverse(mat3(modelMatrix))) * nNor);
 
-                            vec3 I = normalize(cameraPosition - wPos);
+                            vec3 I = normalize( cameraPosition - wPos);
                             float IN = dot(wNor, I);
-                            vec3 R = reflect(I, normalize(wNor));
+                            vec3 R = normalize(reflect(-I, wNor));
+                            vec3 H = normalize(I + R);
+                        
+                            vec2 uv = directionToEquirectUV(R);
 
-                            float diffuse = 0.;
+                            vec3 diffuse = vec3(0.);
                             vec3 spec = vec3(0.);
                             float fresnel = 0.; 
                             if(IN > 0.){
                                 fresnel = pow(1.0 - max(IN, 0.0), 5.0);
-                            }
-
-                            for(int i = 0; i < ${this.lights.length}; i++){
-                                vec3 L = vec3(0.);
-                                L.x = lights[i*3];
-                                L.y = lights[i*3+1];
-                                L.z = lights[i*3+2];
-                                vec3 Lc = vec3(0.);
-                                Lc.x = lcolors[i*3];
-                                Lc.y = lcolors[i*3+1];
-                                Lc.z = lcolors[i*3+2];
+                                }
+                            
+                            vec3 Lc = texture(envMap, uv).rgb;
+                            diffuse += max(dot(wNor, normalize(R)), 0.0);
+                            spec += Lc * pow(max(dot(wNor, H), 0.0), 1.0 / roughness);
+                            // for(int i = 0; i < ${this.lights.length}; i++){
+                            //     vec3 L = vec3(0.);
+                            //     L.x = lights[i*3];
+                            //     L.y = lights[i*3+1];
+                            //     L.z = lights[i*3+2];
+                            //     vec3 Lc = vec3(0.);
+                            //     Lc.x = lcolors[i*3];
+                            //     Lc.y = lcolors[i*3+1];
+                            //     Lc.z = lcolors[i*3+2];
                                 
-                                vec3 L_ =  L - wPos;
-                                vec3 H = normalize(I + L_);
+                            //     vec3 L_ =  L - wPos;
+                            //     vec3 H = normalize(I + L_);
                                 
-                                diffuse += max(dot(wNor, normalize(L_)), 0.0) * lintinsity[i] / pow(length(L_),2.) ;
-                                spec += Lc * pow(max(dot(wNor, H), 0.0), 1.0 / roughness);
-                            }
+                            //     diffuse += max(dot(wNor, normalize(L_)), 0.0) * lintinsity[i] / pow(length(L_),2.) ;
+                            //     spec += Lc * pow(max(dot(wNor, H), 0.0), 1.0 / roughness);
+                            // }
                             vec3 L_ = diffuse*color +  spec * fresnel;
-                            gl_FragColor = vec4(vec3(L_), 0.6);
+                            gl_FragColor = vec4(L_, 0.6);
                         }
                     `
                 })
             );
             this.scene.add(this.water);
-
-            // Add Alter
-
-            // Add Underwater fog
+            
+            // Playing with composer
+            this.composer.addPass( new RenderPass( this.scene, this.camera ) );
+            const effect1 = new ShaderPass( new THREE.ShaderMaterial({
+                uniforms: {
+                  mask: { value: this.fsttarget.textures[0] },
+                  tDiffuse: {value: this.sndtarget.textures[0] },
+                  a: { value: 1.0 }
+                },
+                vertexShader: `
+                    varying vec2 vUv;
+                    void main() {
+                        vUv = uv;
+                        gl_Position = vec4(position,1.0);
+                    }
+                `,
+                fragmentShader: `
+                    precision mediump float;
+                    precision mediump int;
+                    
+                    uniform sampler2D mask;
+                    uniform sampler2D tDiffuse;
+                    uniform float a;
+                    varying vec2 vUv;
+                    void main() {
+                        vec4 original = texture2D(mask, vUv);
+                        vec4 blend = texture(tDiffuse, vUv);
+                        gl_FragColor = mix(original, blend, a);
+                    }
+                `
+              }), this.sndtarget.textures[0]);
+            this.composer.addPass( effect1 );
+            
+            const gammaCorrectionPass = new ShaderPass(GammaCorrectionShader);  
+            this.composer.addPass(gammaCorrectionPass);
         },
         update: function (){
+            this.prescene.traverse(child => {
+                if(child.material && child.material.uniforms?.wphases)
+                    child.material.uniforms.wphases.value = meta.waves.map((wave) => wave.speed * getTime() * Math.PI*2/wave.length);
+            })
             this.controls.update();
         },
-        render : function (){
+        _fstrender:function(){
+            renderer.setRenderTarget(this.fsttarget);
+            renderer.setClearColor(0x000000, 1.0);
+            renderer.render(this.prescene, this.camera);
+            renderer.setRenderTarget(null);
+        },
+        _sndrender: function() {
+            renderer.setRenderTarget(this.sndtarget);
             renderer.render(this.scene, this.camera);
+            renderer.setRenderTarget(null);
+        },
+        render : function (){
+            this._fstrender();
+            this._sndrender();
+            this.composer.render(renderer);
         }
     }
 ]
