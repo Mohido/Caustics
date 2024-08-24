@@ -11,44 +11,44 @@ import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 const meta = {
     wmSize: 1024,        // Wave maps size (normal and displacement maps)
     oSize: 16,          // Ocean size (threejs units)
-    oSegments: 80,      // Ocean segments 
+    oSegments: 100,      // Ocean segments 
     mWaves : 5,         // Max waves (used to define the shaders)
     waves : [           // Waves parameters.
         {
-            length: 1,
-            amplitude: 0.06,
-            speed: 0,
+            length: 5,
+            amplitude: 0.05,
+            speed: 1,
             angle: 0,
             steepness: 0.6,
         },
         {
-            length: 1,
-            amplitude: 0.06,
-            speed: 0,
-            angle: 90,
-            steepness: 0.6,
+            length: 2,
+            amplitude: 0.02,
+            speed: 2,
+            angle: 45,
+            steepness: 0.2,
         },
-        // {
-        //     length: 5,
-        //     amplitude: 0.3,
-        //     speed: 1,
-        //     angle: 0,
-        //     steepness: 0.6,
-        // },
-        // {
-        //     length: 2,
-        //     amplitude: 0.05,
-        //     speed: 2.3,
-        //     angle: 45,
-        //     steepness: 0.2,
-        // },
-        // {
-        //     length: 1.5,
-        //     amplitude: 0.05,
-        //     speed: 2.5,
-        //     angle: 315,
-        //     steepness: 0.2,
-        // },
+        {
+            length: 10,
+            amplitude: 0.5,
+            speed: 1,
+            angle: 20,
+            steepness: 0.8,
+        },
+        {
+            length: 3,
+            amplitude: 0.1,
+            speed: 0,
+            angle: 330,
+            steepness: 1,
+        },
+        {
+            length: 3,
+            amplitude: 0.1,
+            speed: 2,
+            angle: 270,
+            steepness: 1,
+        }
         // {
         //     length: 6,
         //     amplitude: 0.1,
@@ -190,24 +190,15 @@ function causticMaterial(envmap){
 
 
             float snell_caustics(float close, vec3 N, float Ior){
-                
-                // Using Snell's law of refraction
-                vec3 E = vec3(0.,0.,1.);
+                vec3 E = vec3(0.,0.,1.); // Using Snell's law of refraction
                 float EN = dot(E, N);
-
-                // From Foley et al. transmission ray calculation
-                vec3 T = N * (Ior * EN + sqrt(1.+Ior*Ior*(EN*EN - 1.))) + Ior * E;
-
+                vec3 T = N * (Ior * EN + sqrt(1.+Ior*Ior*(EN*EN - 1.))) + Ior * E;      // From Foley et al. transmission ray calculation
                 return dot(normalize(T), vec3(0.,0.,1.)) - close;
             }
 
             float dist_caustics(vec3 N, vec3 P, float l, float h , float depth){
-                // Gets the distance from wave normal to the ground point
-                float dist =  line_plane_intercept( P, -N, vec3(0., 0., 1.), depth);
-                // get only specific distance then normalize it between [0, 1];
+                float dist =  line_plane_intercept( P, -N, vec3(0., 0., 1.), depth);    // Gets the distance from wave normal to the ground point
                 return (clamp(dist, l, h) - l) / (h - l);
-                // return dist;
-                
             }
 
             void main() {
@@ -216,16 +207,21 @@ function causticMaterial(envmap){
                 // Wave position in world space
                 vec3 wpos = wPosition;
                 wpos.z = displaced.position.z;
+                float depth = abs(wPosition.z) + wpos.z;
 
                 // Use snell law to calculate refraction then get value that is close to normal
-                float sc = snell_caustics(0.95, displaced.normal, 1./1.33);
+                // float sc = snell_caustics(0.95, displaced.normal, 1./1.33);
                 // tCaustics = vec4(vec3(sc), 1.0);
 
                 // Use the distance from wave point to the
-                float near = abs(wPosition.z + wpos.z);
-                float far = near + .7;
+                float near = depth;    // abs(wPosition.z);
+                float far = depth + 1.;     //near + abs(wpos.z) + 5.;
                 float dc = dist_caustics(displaced.normal, wpos,  near, far, wPosition.z);
-                tCaustics = vec4(vec3(1. - dc)*.1, 1.0); 
+                float ill = (0.3 - dc) * 0.4;
+                vec3 oc = vec3(0.85, 0.85, 0.95);
+                tCaustics = vec4(oc*ill, 1.0); 
+
+
             }
         `
     });
@@ -383,7 +379,7 @@ const passes = [
                 this.ground.position.y -= 3.55;
                 this.ground.scale.x = 2;
                 this.ground.scale.z = 2;
-                this.scene.fog = new THREE.FogExp2( new THREE.Color(0.0, 0.05, 0.25), 0.06 );
+                this.scene.fog = new THREE.FogExp2( new THREE.Color(0.1, 0.15, 0.25), 0.2 );
                 this.ground.material.side = THREE.FrontSide;
                 this.ground.material.envMap = this.scene.background;
                 this.ground.material.envMapIntensity = 0.2;
