@@ -9,39 +9,53 @@ import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 
 // Variables
 const meta = {
-    wmSize: 512,        // Wave maps size (normal and displacement maps)
-    oSize: 8,          // Ocean size (threejs units)
-    oSegments: 18,      // Ocean segments 
+    wmSize: 1024,        // Wave maps size (normal and displacement maps)
+    oSize: 16,          // Ocean size (threejs units)
+    oSegments: 80,      // Ocean segments 
     mWaves : 5,         // Max waves (used to define the shaders)
     waves : [           // Waves parameters.
         {
-            length: 5,
-            amplitude: 0.3,
-            speed: 1,
+            length: 1,
+            amplitude: 0.06,
+            speed: 0,
             angle: 0,
             steepness: 0.6,
         },
         {
-            length: 2,
-            amplitude: 0.05,
-            speed: 2.3,
-            angle: 45,
-            steepness: 0.2,
+            length: 1,
+            amplitude: 0.06,
+            speed: 0,
+            angle: 90,
+            steepness: 0.6,
         },
-        {
-            length: 1.5,
-            amplitude: 0.05,
-            speed: 2.5,
-            angle: 315,
-            steepness: 0.2,
-        },
-        {
-            length: 6,
-            amplitude: 0.1,
-            speed: 7.3,
-            angle: 70,
-            steepness: 0,
-        },
+        // {
+        //     length: 5,
+        //     amplitude: 0.3,
+        //     speed: 1,
+        //     angle: 0,
+        //     steepness: 0.6,
+        // },
+        // {
+        //     length: 2,
+        //     amplitude: 0.05,
+        //     speed: 2.3,
+        //     angle: 45,
+        //     steepness: 0.2,
+        // },
+        // {
+        //     length: 1.5,
+        //     amplitude: 0.05,
+        //     speed: 2.5,
+        //     angle: 315,
+        //     steepness: 0.2,
+        // },
+        // {
+        //     length: 6,
+        //     amplitude: 0.1,
+        //     speed: 7.3,
+        //     angle: 70,
+        //     steepness: 0,
+        // },
     ]
 }
 
@@ -73,7 +87,6 @@ const textloader = new THREE.TextureLoader();
 const geometries = {
     ocean: new THREE.PlaneGeometry(meta.oSize, meta.oSize, meta.oSegments, meta.oSegments)
 }
-
 function getTime() {
     return performance.now() / 3000;
 }
@@ -148,15 +161,17 @@ function getWaveSubShader(mwaves) {
 
 
 // Uses Gerstner Wave
-function causticMaterial(){
+function causticMaterial(envmap){
     return new THREE.ShaderMaterial({
         glslVersion : THREE.GLSL3,
-        uniforms: wavesToUniforms(),
+        uniforms: {...wavesToUniforms(), envMap: {value: envmap}},
         vertexShader: `
             ${getWaveSubShader(meta.mWaves)}
             varying vec3 oPosition;
+            varying vec3 wPosition;
             void main(){
-                oPosition = vec3(position.x, position.z, 0.0);
+                wPosition = vec4(modelMatrix * vec4(position,1.)).xzy;
+                oPosition = position.xzy;
                 gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
             }
         `,
@@ -164,14 +179,53 @@ function causticMaterial(){
             ${getWaveSubShader(meta.mWaves)}
             layout(location = 0) out vec4 tCaustics;
             varying vec3 oPosition;
+            varying vec3 wPosition;
+
+            float line_plane_intercept(vec3 lineP, vec3 lineN, vec3 planeN, float planeD) {
+                float distance = (planeD - dot(planeN, lineP)) / dot(lineN, planeN);
+                // float distance = (planeD - lineP.z) / lineN.z;
+                // return lineP + lineN * distance;
+                return distance;
+            }
+
+
+            float snell_caustics(float close, vec3 N, float Ior){
+                
+                // Using Snell's law of refraction
+                vec3 E = vec3(0.,0.,1.);
+                float EN = dot(E, N);
+
+                // From Foley et al. transmission ray calculation
+                vec3 T = N * (Ior * EN + sqrt(1.+Ior*Ior*(EN*EN - 1.))) + Ior * E;
+
+                return dot(normalize(T), vec3(0.,0.,1.)) - close;
+            }
+
+            float dist_caustics(vec3 N, vec3 P, float l, float h , float depth){
+                // Gets the distance from wave normal to the ground point
+                float dist =  line_plane_intercept( P, -N, vec3(0., 0., 1.), depth);
+                // get only specific distance then normalize it between [0, 1];
+                return (clamp(dist, l, h) - l) / (h - l);
+                // return dist;
+                
+            }
+
             void main() {
                 Displacement displaced = gerstner(Displacement(oPosition, vec3(0.,0.,1.)));
-                
-                // Calculate Transmition Ray
 
-                // Closer angle to ground normal, means strong light. 
+                // Wave position in world space
+                vec3 wpos = wPosition;
+                wpos.z = displaced.position.z;
 
-                tCaustics = vec4(displaced.normal, 1.0); 
+                // Use snell law to calculate refraction then get value that is close to normal
+                float sc = snell_caustics(0.95, displaced.normal, 1./1.33);
+                // tCaustics = vec4(vec3(sc), 1.0);
+
+                // Use the distance from wave point to the
+                float near = abs(wPosition.z + wpos.z);
+                float far = near + .7;
+                float dc = dist_caustics(displaced.normal, wpos,  near, far, wPosition.z);
+                tCaustics = vec4(vec3(1. - dc)*.1, 1.0); 
             }
         `
     });
@@ -327,6 +381,8 @@ const passes = [
                 this.ground = mesh.scene.children[0];
                 this.ground.material.specularIntensity = 0;
                 this.ground.position.y -= 3.55;
+                this.ground.scale.x = 2;
+                this.ground.scale.z = 2;
                 this.scene.fog = new THREE.FogExp2( new THREE.Color(0.0, 0.05, 0.25), 0.06 );
                 this.ground.material.side = THREE.FrontSide;
                 this.ground.material.envMap = this.scene.background;
@@ -455,6 +511,7 @@ const passes = [
                     `
                 })
             );
+            this.water.position.y += 0.5;
             this.scene.add(this.water);
             
             // Playing with composer
@@ -463,7 +520,7 @@ const passes = [
                 uniforms: {
                   mask: { value: this.fsttarget.textures[0] },
                   tDiffuse: {value: this.sndtarget.textures[0] },
-                  a: { value: 1.0 }
+                  a: { value: 0.0 }
                 },
                 vertexShader: `
                     varying vec2 vUv;
@@ -483,7 +540,8 @@ const passes = [
                     void main() {
                         vec4 original = texture2D(mask, vUv);
                         vec4 blend = texture(tDiffuse, vUv);
-                        gl_FragColor = mix(original, blend, a);
+                        // gl_FragColor = mix(original, blend, a);
+                        gl_FragColor = original + blend;
                     }
                 `
               }), this.sndtarget.textures[0]);
