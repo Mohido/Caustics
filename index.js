@@ -15,47 +15,41 @@ const meta = {
     mWaves : 5,         // Max waves (used to define the shaders)
     waves : [           // Waves parameters.
         {
-            length: 5,
-            amplitude: 0.05,
+            length: 2,
+            amplitude: 0.2,
             speed: 1,
             angle: 0,
-            steepness: 0.6,
+            steepness: 0,
         },
         {
-            length: 2,
-            amplitude: 0.02,
-            speed: 2,
-            angle: 45,
-            steepness: 0.2,
-        },
-        {
-            length: 10,
-            amplitude: 0.5,
+            length: 4,
+            amplitude: 0.4,
             speed: 1,
-            angle: 20,
-            steepness: 0.8,
-        },
-        {
-            length: 3,
-            amplitude: 0.1,
-            speed: 0,
-            angle: 330,
+            angle: 90,
             steepness: 1,
         },
         {
-            length: 3,
+            length: 1,
             amplitude: 0.1,
-            speed: 2,
-            angle: 270,
-            steepness: 1,
+            speed: 0.5,
+            angle: 45,
+            steepness: 0,
+        },
+        {
+            length: 0.8,
+            amplitude: 0.008,
+            speed: 0.1,
+            angle: 200,
+            steepness: 0
+        },
+        {
+            length: 1,
+            amplitude: 0.01,
+            speed: 0.3,
+            angle: 120,
+            steepness: 0
         }
-        // {
-        //     length: 6,
-        //     amplitude: 0.1,
-        //     speed: 7.3,
-        //     angle: 70,
-        //     steepness: 0,
-        // },
+                
     ]
 }
 
@@ -211,17 +205,15 @@ function causticMaterial(envmap){
 
                 // Use snell law to calculate refraction then get value that is close to normal
                 // float sc = snell_caustics(0.95, displaced.normal, 1./1.33);
-                // tCaustics = vec4(vec3(sc), 1.0);
+                // tCaustics = vec4(vec3(sc)*5., 1.0);
 
                 // Use the distance from wave point to the
                 float near = depth;    // abs(wPosition.z);
                 float far = depth + 1.;     //near + abs(wpos.z) + 5.;
                 float dc = dist_caustics(displaced.normal, wpos,  near, far, wPosition.z);
-                float ill = (0.3 - dc) * 0.4;
+                float ill = (0.3 - dc) ;
                 vec3 oc = vec3(0.85, 0.85, 0.95);
                 tCaustics = vec4(oc*ill, 1.0); 
-
-
             }
         `
     });
@@ -379,7 +371,7 @@ const passes = [
                 this.ground.position.y -= 3.55;
                 this.ground.scale.x = 2;
                 this.ground.scale.z = 2;
-                this.scene.fog = new THREE.FogExp2( new THREE.Color(0.1, 0.15, 0.25), 0.2 );
+                this.scene.fog = new THREE.FogExp2( new THREE.Color(0.0, 0.05, 0.15), 0.2 );
                 this.ground.material.side = THREE.FrontSide;
                 this.ground.material.envMap = this.scene.background;
                 this.ground.material.envMapIntensity = 0.2;
