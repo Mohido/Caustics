@@ -57,8 +57,39 @@ if(!renderer.capabilities.isWebGL2){
 renderer.setSize(window.innerWidth, window.innerHeight);
 document.body.appendChild(renderer.domElement);
 
-// Composer (Allows us to render sequentially)
-const renderTarget = new THREE.WebGLRenderTarget(window.innerWidth, window.innerHeight);
+// init scene and camera
+const scene = new THREE.Scene();
+scene.fog = new THREE.FogExp2( new THREE.Color(0.0, 0.05, 0.15), 0.2 );
+const camera = new THREE.PerspectiveCamera(50, window.innerWidth/window.innerHeight, 0.1, 100);
+camera.position.z = 3; camera.position.x = 0; camera.position.y = 0.5;
+
+// provide mouse inputs to camera
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target = new THREE.Vector3(0,-1,0);
+controls.update();
+
+// Define Multipass renderer
+const composer = new EffectComposer(renderer);
+const crp = new RenderPass(scene, camera);
+composer.addPass(crp);
+
+// Add background
+const exrLoader = new EXRLoader();
+exrLoader.load('public/sunflowers_puresky_1k.exr', (texture) => {
+    texture.mapping = THREE.EquirectangularReflectionMapping;
+    scene.background = texture;
+    scene.environment = texture;
+    texture.dispose();
+})
+
+// Add meshes and passes
+const gltfloader = new GLTFLoader();
+gltfloader.load('public/scene.glb', (data) => {
+    data.scene.traverse(function (object) {
+        object.isMesh && (object.material.side = THREE.FrontSide);  // Don't render both sides.
+    });
+    scene.add(data.scene);
+});
 
 // Helper Functions
 function getTime() {
@@ -79,6 +110,7 @@ function wavesToUniforms(){
             wsteepnesses:  {value : (meta.waves.map((wave) => wave.steepness) )} 
         }
 }
+
 
 // Gerstner Wave subshader Shader
 function gerstnerWaveSubShader(mwaves) {
@@ -134,7 +166,9 @@ function gerstnerWaveSubShader(mwaves) {
     `
 }
 
+
 // Caustics Full Material
+const renderTarget = new THREE.WebGLRenderTarget(window.innerWidth, window.innerHeight);
 function causticMaterial(){
     return new THREE.ShaderMaterial({
         glslVersion : THREE.GLSL3,
@@ -195,40 +229,8 @@ function causticMaterial(){
 }
 const caustics = causticMaterial();
 
-// init scene and camera
-const scene = new THREE.Scene();
-scene.fog = new THREE.FogExp2( new THREE.Color(0.0, 0.05, 0.15), 0.2 );
-const camera = new THREE.PerspectiveCamera(50, window.innerWidth/window.innerHeight, 0.1, 100);
-camera.position.z = 3; camera.position.x = 0; camera.position.y = 0.5;
-
-// provide mouse inputs to camera
-const controls = new OrbitControls(camera, renderer.domElement);
-controls.target = new THREE.Vector3(0,-1,0);
-controls.update();
-
-// Add background
-const exrLoader = new EXRLoader();
-exrLoader.load('public/sunflowers_puresky_1k.exr', (texture) => {
-    texture.mapping = THREE.EquirectangularReflectionMapping;
-    scene.background = texture;
-    scene.environment = texture;
-    texture.dispose();
-})
-
-// Add meshes and passes
-const gltfloader = new GLTFLoader();
-gltfloader.load('public/scene.glb', (data) => {
-    data.scene.traverse(function (object) {
-        object.isMesh && (object.material.side = THREE.FrontSide);  // Don't render both sides.
-    });
-    scene.add(data.scene);
-});
-
 
 // Setting Up Composer to Render Scene, blend caustics, correct Gama output
-const composer = new EffectComposer(renderer);
-const crp = new RenderPass(scene, camera);
-composer.addPass(crp);
 composer.addPass(new ShaderPass(new THREE.ShaderMaterial({
     glslVersion : THREE.GLSL3,
     uniforms: {tDiffuse : {value: null}, tCaustics: {value: renderTarget.texture}},
@@ -250,16 +252,16 @@ composer.addPass(new ShaderPass(new THREE.ShaderMaterial({
         }
     `
 })));
-composer.addPass(new OutputPass());
-
 
 // Animation loop
+composer.addPass(new OutputPass());
+
 function animate() {
     // Updating
     controls.update();
-    caustics.uniforms.wphases.value = meta.waves.map((wave) => wave.speed * getTime() * Math.PI*2/wave.length);
-
+    
     // Rendering caustics to texture
+    caustics.uniforms.wphases.value = meta.waves.map((wave) => wave.speed * getTime() * Math.PI*2/wave.length);
     renderer.setRenderTarget(renderTarget);
     scene.overrideMaterial = caustics;
     renderer.render(scene,camera);
@@ -282,3 +284,4 @@ window.addEventListener("resize", () => {
     controls.update();
     composer.setSize(window.innerWidth, window.innerHeight );
 })
+
