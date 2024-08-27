@@ -10,7 +10,7 @@ import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 // Variables
 const meta = {
     mWaves : 10,
-    waves : [           // Waves parameters.
+    waves : [
         {
             length: 2,
             amplitude: 0.2,
@@ -272,7 +272,6 @@ function animate() {
 }
 
 animate();
-
 
 // Events
 window.addEventListener("resize", () => {
