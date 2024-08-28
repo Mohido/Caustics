@@ -168,13 +168,11 @@ function gerstnerWaveSubShader(mwaves) {
 
 
 // Caustics Full Material
-const renderTarget = new THREE.WebGLRenderTarget(window.innerWidth, window.innerHeight);
 function causticMaterial(){
     return new THREE.ShaderMaterial({
         glslVersion : THREE.GLSL3,
-        uniforms: {...wavesToUniforms(), tDiffuse: {value: renderTarget.texture}},
+        uniforms: {...wavesToUniforms()},
         vertexShader: `
-            ${gerstnerWaveSubShader(meta.mWaves)}
             varying vec3 oPosition;
             varying vec3 wPosition;
             void main(){
@@ -185,7 +183,6 @@ function causticMaterial(){
         `,
         fragmentShader: `
             ${gerstnerWaveSubShader(meta.mWaves)}
-            uniform sampler2D tDiffuse;
             layout(location = 0) out vec4 fragColor;
 
             varying vec3 oPosition;
@@ -211,14 +208,14 @@ function causticMaterial(){
             void main() {
                 Displacement displaced = gerstner(Displacement(oPosition, vec3(0.,0.,1.)));
 
+                // Use Snell law
+                // float sc = snell_caustics(0.95, displaced.normal, 1./1.33);
+                // fragColor  = vec4(vec3(sc)*5., 1.0);
+
                 // Wave position in world space
                 vec3 wpos = wPosition;
                 wpos.z = displaced.position.z;
                 float depth = abs(wPosition.z) + wpos.z;
-
-                // Use Snell law
-                // float sc = snell_caustics(0.95, displaced.normal, 1./1.33);
-                // fragColor  = vec4(vec3(sc)*5., 1.0);
 
                 // Or use the distance model
                 float dc = 0.2 - dist_caustics(displaced.normal, wpos,  depth, depth + 1., wPosition.z);
@@ -231,6 +228,7 @@ const caustics = causticMaterial();
 
 
 // Setting Up Composer to Render Scene, blend caustics, correct Gama output
+const renderTarget = new THREE.WebGLRenderTarget(window.innerWidth, window.innerHeight);
 composer.addPass(new ShaderPass(new THREE.ShaderMaterial({
     glslVersion : THREE.GLSL3,
     uniforms: {tDiffuse : {value: null}, tCaustics: {value: renderTarget.texture}},
@@ -255,7 +253,6 @@ composer.addPass(new ShaderPass(new THREE.ShaderMaterial({
 
 // Animation loop
 composer.addPass(new OutputPass());
-
 function animate() {
     // Updating
     controls.update();
