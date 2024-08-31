@@ -5,6 +5,6 @@ Implementation of the [second GPU Gems Paper (Water Caustics)](https://developer
 
 
 
-Credits:
-Skymap: https://polyhaven.com/a/sunflowers_puresky
-GPU Gems: https://developer.nvidia.com/gpugems/gpugems/part-i-natural-effects/chapter-2-rendering-water-caustics
+# Credits
+* Skymap: https://polyhaven.com/a/sunflowers_puresky
+* GPU Gems: https://developer.nvidia.com/gpugems/gpugems/part-i-natural-effects/chapter-2-rendering-water-caustics
